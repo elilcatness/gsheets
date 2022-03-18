@@ -1,52 +1,75 @@
 import json
 import os
-from dotenv import load_dotenv
-from datetime import time, tzinfo
+from datetime import time
 
-from telegram import Update
-from telegram.ext import Updater, CallbackContext, CommandHandler
+from pytz import UTC
+from telegram.ext import Updater, CallbackContext, CommandHandler, ConversationHandler, CallbackQueryHandler, \
+    MessageHandler, Filters
 
+from src.admin import show_data, reset_data, request_changing_data, change_data, ask_resetting_data
 from src.db import db_session
-from src.utils import extract_urls
-
 from src.db.models.state import State
-from src.constants import START_HOUR_UTC
+from src.general import serve, start
+from src.utils import get_config
 
 
-def serve(context: CallbackContext):
-    pass
+def start_jobs(dispatcher, bot):
+    context = CallbackContext(dispatcher)
+    context._bot = bot
+    t = time(hour=get_config()['Час запуска (UTC)'], tzinfo=UTC)
+    context.job_queue.run_daily(serve, t, context=context, name='serve')
 
 
-def start(update: Update, context: CallbackContext):
-    if not context.user_data['id'] and update.message:
-        context.user_data['id'] = update.message.from_user.id
+def manual_start(_, context: CallbackContext):
+    jobs = context.job_queue.get_jobs_by_name('serve')
+    if any(job.enabled for job in jobs):
+        return context.bot.send_message(context.user_data['id'], 'Работа уже ведётся')
+    try:
+        context.job_queue.run_once(serve, 0, context=context, name='serve')
+    except TypeError as e:
+        print(f'[WARNING] {e}')
+
+
+def load_states(updater: Updater, conv_handler: ConversationHandler):
     with db_session.create_session() as session:
-        if not session.query(State).get(context.user_data['id']):
-            session.add(State(id=context.user_data['id']))
-            session.commit()
-    if not context.job_queue.get_jobs_by_name('serve'):
-        tz = tzinfo('UTC')
-        hour = START_HOUR_UTC if isinstance(START_HOUR_UTC, int) and (8 <= START_HOUR_UTC < 24) else 10
-        t = time(hour=START_HOUR_UTC, tzinfo=tz)
-        print(t)
-        context.job_queue.run_daily(serve, t, context=context, name='serve')
-        return context.bot.send_message(context.user_data['id'], f'Обработка начнётся в {hour}:00 (UTC)')
-    return context.bot.send_message(context.user_data['id'], 'Обработка уже ведётся')
+        for state in session.query(State).all():
+            conv_handler._conversations[(state.user_id, state.user_id)] = state.callback
+            updater.dispatcher.user_data[state.user_id] = json.loads(state.data)
 
 
-def stop(_, context: CallbackContext):
-    for job in context.job_queue.get_jobs_by_name('serve'):
-        job.schedule_removal()
-    return context.bot.send_message(context.user_data['id'],
-                                    'Работа была приостановлена, для перезапуска введите /start')
+def error_handler(_, context: CallbackContext):
+    e = context.error
+    with db_session.create_session() as session:
+        for state in session.query(State).all():
+            context.bot.send_message(state.user_id, f'An exception occurred!\n\n'
+                                                    f'{e.__class__}: {e}\n'
+                                                    f'Cause: {e.__cause__}\nContext: {e.__context__}\n')
 
 
 def main():
     updater = Updater(os.getenv('token'))
-    updater.dispatcher.add_handler(CommandHandler())
+    conv_handler = ConversationHandler(
+        allow_reentry=True,
+        per_message=False,
+        entry_points=[CommandHandler('start', start)],
+        states={'menu': [CallbackQueryHandler(manual_start, pattern='manual'),
+                         CallbackQueryHandler(show_data, pattern='admin')],
+                'data': [CallbackQueryHandler(show_data, pattern='data'),
+                         MessageHandler((~Filters.text('Вернуться назад')) & Filters.text, change_data)],
+                'data_resetting': [CallbackQueryHandler(reset_data, pattern='change_yes'),
+                                   CallbackQueryHandler(start, pattern='change_no')],
+                'data_requesting': [CallbackQueryHandler(start, pattern='menu'),
+                                    CallbackQueryHandler(request_changing_data, pattern=''),
+                                    CallbackQueryHandler(ask_resetting_data, pattern='ask')]},
+        fallbacks=[CommandHandler('start', start)])
+    updater.dispatcher.add_handler(conv_handler)
+    # updater.dispatcher.add_error_handler(error_handler)
+    load_states(updater, conv_handler)
+    start_jobs(updater.dispatcher, updater.bot)
+    updater.start_polling()
+    updater.idle()
 
 
 if __name__ == '__main__':
-    load_dotenv()
     db_session.global_init(os.getenv('DATABASE_URL'))
     main()

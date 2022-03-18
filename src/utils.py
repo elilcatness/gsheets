@@ -4,19 +4,18 @@ from datetime import date, timedelta
 import time
 from csv import DictWriter
 
-# noinspection PyUnresolvedReferences
 from typing import Union
 
+# noinspection PyUnresolvedReferences
 from apiclient.discovery import build
-from dotenv import load_dotenv
-from googleapiclient.errors import HttpError
-from gspread import service_account_from_dict, Client, Worksheet
+from gspread import service_account_from_dict, Client
+from gspread.exceptions import APIError
 from httplib2 import Http
 from oauth2client.service_account import ServiceAccountCredentials
 from telegram.error import BadRequest
 from telegram.ext import CallbackContext
 
-from constants import MAX_ROWS_COUNT
+from src.constants import MAX_ROWS_COUNT
 
 from src.db import db_session
 from src.db.models.config import Config
@@ -72,7 +71,7 @@ def get_config():
         try:
             cfg = json.loads(session.query(Config).first().text)
         except AttributeError:
-            with open(os.path.join('data', 'config.json'), encoding='utf-8') as f:
+            with open(os.path.join('src', 'config.json'), encoding='utf-8') as f:
                 data = f.read()
                 session.add(Config(text=data))
                 session.commit()
@@ -96,7 +95,7 @@ def get_spreadsheet(creds: dict, spread_id: str):
     return account.open_by_key(spread_id)
 
 
-def extract_urls(spread_url: str, creds: dict):
+def extract_urls(spread_url: str, creds: dict, return_spread: bool = False):
     if (not spread_url.startswith('http://docs.google.com/spreadsheets/d/') and
             not spread_url.startswith('https://docs.google.com/spreadsheets/d/')):
         return print('Введён неверный URL таблицы')
@@ -122,7 +121,8 @@ def extract_urls(spread_url: str, creds: dict):
         if isinstance(url, str) and url.startswith('http') and url not in urls:
             urls.append(url)
             dates.append(dt)
-    return [list(x) for x in zip(urls, dates)]
+    return ([list(x) for x in zip(urls, dates)] if not return_spread else
+            [list(x) for x in zip(urls, dates)], spread)
 
 
 def get_console(creds: dict):
@@ -136,49 +136,59 @@ def _execute_request(service, url: str, request: dict):
     return service.searchanalytics().query(siteUrl=url, body=request).execute()
 
 
-def process_url(url: str, date: str) -> list[dict]:
-    with open('../creds.json', encoding='utf-8') as f:
-        creds = json.loads(f.read())
+def process_url(url: str, dt: str, creds: dict) -> list[dict]:
     service = get_console(creds)
-    print(f'{date=}')
-    headers = ['Page', 'Query', 'Device', 'Country']
-    request = {'startDate': '2022-01-01',
-               'endDate': '2022-03-18',
+    print(f'{dt=}')
+    headers = ['page', 'query', 'device', 'country']
+    request = {'startDate': dt,
+               'endDate': dt,
                'dimensions': headers}
     response = _execute_request(service, url, request)
     output = []
     for row in response.get('rows', []):
-        ...
-    print(response)
-    exit()
-    # return []
-    # with open('../input.json', encoding='utf-8') as f:
-    #     return json.loads(f.read())
+        keys = row.pop('keys')
+        data = {headers[i]: keys[i] for i in range(len(keys))}
+        output.append({**data, **row})
+    return output
 
 
-def process_table(data: list[dict], service, table_name: str, dt: str, email: str):
-    filename = f'{"".join(str(time.time()).split("."))}.csv'
+def generate_csv(data: list[dict]) -> str:
+    filename = f'{generate_timestamp()}.csv'
     headers = list(data[0].keys())
     with open(filename, 'w', newline='', encoding='utf-8') as csv_file:
         writer = DictWriter(csv_file, headers, delimiter=',')
         writer.writeheader()
         writer.writerows(data)
+    return filename
+
+
+def process_table(data: list[dict], service, table_name: str, dt: str, email: str):
+    filename = generate_csv(data)
     spread = service.create(table_name)
     service: Client
     print(f'{spread=}')
     with open(filename, encoding='utf-8') as f:
         service.import_csv(spread.id, f.read().encode('utf-8'))
     spread.worksheets()[0].update_title(dt)
-    spread.share(email, 'user', 'owner')
+    unshared_tables = []
+    try:
+        spread.share(email, 'user', 'owner')
+    except APIError as e:
+        print(f'[ERROR] {e.response}')
+        unshared_tables.append(spread.url)
     try:
         os.remove(filename)
     except Exception as e:
         print(f'[FILE DELETE] {e}')
-    print(spread.url, end='\n\n')
+    return unshared_tables
 
 
-def fill_url_spread(url: str, service: Client, dt: str, email: str):
-    data = process_url(url, dt)
+def fill_url_spread(url: str, service: Client, dt: str, email: str, creds: dict):
+    data = process_url(url, dt, creds)
+    unshared_tables = []
+    if not data:
+        print(f'[WARNING] Empty data for {url} on {dt}')
+        return 0, unshared_tables
     url = url.split('//')[1].rstrip('/').replace('.', '_')
     dt = dt.replace('-', '')
     table_name = f'Search_console_{url}_{dt}'
@@ -192,8 +202,9 @@ def fill_url_spread(url: str, service: Client, dt: str, email: str):
         else:
             sub_data = data[:]
             sub_table_name = table_name
-        process_table(sub_data, service, sub_table_name, dt, email)
+        unshared_tables = process_table(sub_data, service, sub_table_name, dt, email)
         n += 1
+    return n - 1, unshared_tables
 
 
 def get_iso_dates_interval(first_date: Union[str, date], last_date: Union[str, date]) -> list[str]:
@@ -208,48 +219,5 @@ def get_iso_dates_interval(first_date: Union[str, date], last_date: Union[str, d
     return dates
 
 
-def main():
-    with open('../creds.json', encoding='utf-8') as f:
-        creds = json.loads(f.read())
-    input_data = extract_urls(os.getenv('spread_url'), creds)
-    new_data = []
-    today = date.today().isoformat()
-    service = service_account_from_dict(creds)
-    email = os.getenv('email')
-    for url, last_date in input_data:
-        dates = get_iso_dates_interval(last_date, today)
-        print(f'{dates=}')
-        for dt in dates:
-            print(url)
-            try:
-                fill_url_spread(url, service, dt, email)
-            except HttpError as e:
-                if e.status_code == 400:
-                    print(f'\n[ERROR] {e}\n')
-                    break
-                raise e
-        else:
-            new_data.append([url, today])
-    print(f'{new_data=}')
-
-    # print(process_url('', '2022-02-12'))
-
-    # with open('creds.json', encoding='utf-8') as f:
-    #     creds = json.loads(f.read())
-    # last_date = date.today() - timedelta(days=1)
-    # _date = date.today()
-    # dates = []
-    # while last_date <= _date:
-    #     dates.append(_date.isoformat())
-    #     _date -= timedelta(days=1)
-    # service = service_account_from_dict(creds)
-    # email = os.getenv('email')
-    # for url in extract_urls(os.getenv('spread_url'), creds):
-    #     for dt in dates[::-1]:
-    #         fill_url_spread(url, service, dt, email)
-
-
-if __name__ == '__main__':
-    load_dotenv()
-    # db_session.global_init(os.getenv('DATABASE_URL'))
-    main()
+def generate_timestamp():
+    return ''.join(str(time.time()).split('.'))
