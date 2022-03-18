@@ -1,1 +1,2 @@
-from src.db.models.last_date import LastDate
+from src.db.models.state import State
+from src.db.models.config import Config

@@ -5,16 +5,90 @@ import time
 from csv import DictWriter
 
 # noinspection PyUnresolvedReferences
+from typing import Union
+
 from apiclient.discovery import build
 from dotenv import load_dotenv
+from googleapiclient.errors import HttpError
 from gspread import service_account_from_dict, Client, Worksheet
 from httplib2 import Http
 from oauth2client.service_account import ServiceAccountCredentials
+from telegram.error import BadRequest
+from telegram.ext import CallbackContext
 
-from constants import DIGITS, MAX_ROWS_COUNT
+from constants import MAX_ROWS_COUNT
 
 from src.db import db_session
-from src.db.models.last_date import LastDate
+from src.db.models.config import Config
+from src.db.models.state import State
+
+
+def delete_last_message(func):
+    def wrapper(update, context: CallbackContext, **kwargs):
+        if context.user_data.get('message_id'):
+            try:
+                context.bot.deleteMessage(context.user_data['id'], context.user_data.pop('message_id'))
+            except BadRequest:
+                pass
+        while context.user_data.get('messages_to_delete'):
+            try:
+                context.bot.deleteMessage(context.user_data['id'],
+                                          context.user_data['messages_to_delete'].pop(0))
+            except BadRequest:
+                pass
+        output = func(update, context, **kwargs)
+        if isinstance(output, tuple):
+            msg, callback = output
+            context.user_data['message_id'] = msg.message_id
+        else:
+            callback = output
+        save_state(context.user_data['id'], callback, context.user_data)
+        return callback
+
+    return wrapper
+
+
+def save_state(user_id: int, callback: str, data: dict):
+    with db_session.create_session() as session:
+        state = session.query(State).get(user_id)
+        str_data = json.dumps(data)
+        if state:
+            state.user_id = user_id
+            state.callback = callback
+            state.data = str_data
+        else:
+            state = State(user_id=user_id, callback=callback, data=str_data)
+        session.add(state)
+        session.commit()
+
+
+def get_current_state(user_id: int):
+    with db_session.create_session() as session:
+        return session.query(State).get(user_id)
+
+
+def get_config():
+    with db_session.create_session() as session:
+        try:
+            cfg = json.loads(session.query(Config).first().text)
+        except AttributeError:
+            with open(os.path.join('data', 'config.json'), encoding='utf-8') as f:
+                data = f.read()
+                session.add(Config(text=data))
+                session.commit()
+                cfg = json.loads(data)
+    return cfg
+
+
+def save_config(cfg):
+    with db_session.create_session() as session:
+        config = session.query(Config).first()
+        if not config:
+            session.add(Config(text=json.dumps(cfg)))
+        else:
+            config.text = json.dumps(cfg)
+            session.merge(config)
+        session.commit()
 
 
 def get_spreadsheet(creds: dict, spread_id: str):
@@ -33,15 +107,22 @@ def extract_urls(spread_url: str, creds: dict):
         return print('В URL отсутствует ID таблицы')
     spread = get_spreadsheet(creds, spread_id)
     sheet = spread.worksheets()[0]
-    urls = []
-    for col in range(1, sheet.col_count + 1):
-        values = sheet.col_values(col)
-        if not values:
-            break
-        for val in values:
-            if isinstance(val, str) and val.startswith('http') and val not in urls:
-                urls.append(val)
-    return urls
+    urls, dates = [], []
+    today = date.today().isoformat()
+    for row in sheet.get_all_values():
+        if len(row) == 1:
+            row += [today]
+        elif len(row) > 2:
+            row = row[:2]
+        url, dt = row
+        try:
+            dt = date.fromisoformat(dt).isoformat()
+        except (ValueError, TypeError):
+            dt = today
+        if isinstance(url, str) and url.startswith('http') and url not in urls:
+            urls.append(url)
+            dates.append(dt)
+    return [list(x) for x in zip(urls, dates)]
 
 
 def get_console(creds: dict):
@@ -56,16 +137,23 @@ def _execute_request(service, url: str, request: dict):
 
 
 def process_url(url: str, date: str) -> list[dict]:
-    # with open('../creds.json', encoding='utf-8') as f:
-    #     creds = json.loads(f.read())
-    # service = get_console(creds)
-    # request = {'startDate': date,
-    #            'endDate': date,
-    #            'dimensions': ['date']}
-    # response = _execute_request(service, url, request)
+    with open('../creds.json', encoding='utf-8') as f:
+        creds = json.loads(f.read())
+    service = get_console(creds)
+    print(f'{date=}')
+    headers = ['Page', 'Query', 'Device', 'Country']
+    request = {'startDate': '2022-01-01',
+               'endDate': '2022-03-18',
+               'dimensions': headers}
+    response = _execute_request(service, url, request)
+    output = []
+    for row in response.get('rows', []):
+        ...
+    print(response)
+    exit()
     # return []
-    with open('../input.json', encoding='utf-8') as f:
-        return json.loads(f.read())
+    # with open('../input.json', encoding='utf-8') as f:
+    #     return json.loads(f.read())
 
 
 def process_table(data: list[dict], service, table_name: str, dt: str, email: str):
@@ -90,10 +178,10 @@ def process_table(data: list[dict], service, table_name: str, dt: str, email: st
 
 
 def fill_url_spread(url: str, service: Client, dt: str, email: str):
+    data = process_url(url, dt)
     url = url.split('//')[1].rstrip('/').replace('.', '_')
     dt = dt.replace('-', '')
     table_name = f'Search_console_{url}_{dt}'
-    data = process_url(url, date)
     n = 1
     set_number = len(data) > MAX_ROWS_COUNT
     while len(data) > MAX_ROWS_COUNT or n == 1:
@@ -108,27 +196,57 @@ def fill_url_spread(url: str, service: Client, dt: str, email: str):
         n += 1
 
 
-def main():
-    # with db_session.create_session() as session:
-    #     date = session.query(LastDate).first()
-    #     if not date:
-    #         date = LastDate(last_date=date.today().toisoformat())
-    #         session.add(date)
-    #         session.commit()
-    #     last_date = date.last_date
-    with open('creds.json', encoding='utf-8') as f:
-        creds = json.loads(f.read())
-    last_date = date.today() - timedelta(days=1)
-    _date = date.today()
+def get_iso_dates_interval(first_date: Union[str, date], last_date: Union[str, date]) -> list[str]:
+    if isinstance(first_date, str):
+        first_date = date.fromisoformat(first_date)
+    if isinstance(last_date, str):
+        last_date = date.fromisoformat(last_date)
     dates = []
-    while last_date <= _date:
-        dates.append(_date.isoformat())
-        _date -= timedelta(days=1)
+    while first_date <= last_date:
+        dates.append(first_date.isoformat())
+        first_date += timedelta(days=1)
+    return dates
+
+
+def main():
+    with open('../creds.json', encoding='utf-8') as f:
+        creds = json.loads(f.read())
+    input_data = extract_urls(os.getenv('spread_url'), creds)
+    new_data = []
+    today = date.today().isoformat()
     service = service_account_from_dict(creds)
     email = os.getenv('email')
-    for url in extract_urls(os.getenv('spread_url'), creds):
-        for dt in dates[::-1]:
-            fill_url_spread(url, service, dt, email)
+    for url, last_date in input_data:
+        dates = get_iso_dates_interval(last_date, today)
+        print(f'{dates=}')
+        for dt in dates:
+            print(url)
+            try:
+                fill_url_spread(url, service, dt, email)
+            except HttpError as e:
+                if e.status_code == 400:
+                    print(f'\n[ERROR] {e}\n')
+                    break
+                raise e
+        else:
+            new_data.append([url, today])
+    print(f'{new_data=}')
+
+    # print(process_url('', '2022-02-12'))
+
+    # with open('creds.json', encoding='utf-8') as f:
+    #     creds = json.loads(f.read())
+    # last_date = date.today() - timedelta(days=1)
+    # _date = date.today()
+    # dates = []
+    # while last_date <= _date:
+    #     dates.append(_date.isoformat())
+    #     _date -= timedelta(days=1)
+    # service = service_account_from_dict(creds)
+    # email = os.getenv('email')
+    # for url in extract_urls(os.getenv('spread_url'), creds):
+    #     for dt in dates[::-1]:
+    #         fill_url_spread(url, service, dt, email)
 
 
 if __name__ == '__main__':
