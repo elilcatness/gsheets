@@ -63,7 +63,7 @@ def main():
                                     CallbackQueryHandler(ask_resetting_data, pattern='ask')]},
         fallbacks=[CommandHandler('start', start)])
     updater.dispatcher.add_handler(conv_handler)
-    # updater.dispatcher.add_error_handler(error_handler)
+    updater.dispatcher.add_error_handler(error_handler)
     load_states(updater, conv_handler)
     start_jobs(updater.dispatcher, updater.bot)
     updater.start_polling()
