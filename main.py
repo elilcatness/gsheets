@@ -2,7 +2,9 @@ import json
 import os
 from datetime import time
 
+from gspread import service_account_from_dict
 from pytz import UTC
+from telegram import Update, ParseMode
 from telegram.ext import Updater, CallbackContext, CommandHandler, ConversationHandler, CallbackQueryHandler, \
     MessageHandler, Filters
 
@@ -10,7 +12,7 @@ from src.admin import show_data, reset_data, request_changing_data, change_data,
 from src.db import db_session
 from src.db.models.state import State
 from src.general import serve, start
-from src.utils import get_config
+from src.utils import get_config, share_spread, generate_timestamp, delete_last_message
 
 
 def start_jobs(dispatcher, bot):
@@ -46,6 +48,46 @@ def error_handler(_, context: CallbackContext):
                                                     f'Cause: {e.__cause__}\nContext: {e.__context__}\n')
 
 
+@delete_last_message
+def ask_spreads(_, context: CallbackContext):
+    context.bot.send_message(context.user_data['id'],
+                             'Отправьте список URL таблиц для разблокировки (каждая на новой строке)\n'
+                             'Или прикрепите текстовый файл (.txt) в таком же формате')
+    return 'ask_spreads'
+
+
+def unlock_spreads(update: Update, context: CallbackContext):
+    if update.message.document:
+        spreads_urls = [x.strip() for x
+                        in update.message.document.get_file().download_as_bytearray().decode('utf-8').split('\n')]
+    else:
+        spreads_urls = [x.strip() for x in update.message.text.split('\n')]
+    cfg = get_config()
+    creds = json.loads(cfg['Сервисный аккаунт (JSON)'])
+    service = service_account_from_dict(creds)
+    unshared_tables = []
+    for spread_url in spreads_urls:
+        spread = service.open_by_url(spread_url)
+        if not share_spread(spread, cfg['Email'], 'user', 'owner'):
+            unshared_tables.append(spread.url)
+    text = (f'<b>Таблиц разблокировано:</b> <b>{len(spreads_urls) - len(unshared_tables)}</b> '
+            f'из <b>{len(unshared_tables)}</b>')
+    if unshared_tables:
+        filename = f'{generate_timestamp()}.txt'
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(unshared_tables))
+        with open(filename, 'rb') as f:
+            context.bot.send_document(context.user_data['id'], f, filename, text,
+                                      parse_mode=ParseMode.HTML)
+        try:
+            os.remove(filename)
+        except Exception as e:
+            print(f'[ERROR] On delete: {e}')
+    else:
+        context.bot.send_message(context.user_data['id'], text, parse_mode=ParseMode.HTML)
+    return start(update, context)
+
+
 def main():
     updater = Updater(os.getenv('token'))
     conv_handler = ConversationHandler(
@@ -53,14 +95,16 @@ def main():
         per_message=False,
         entry_points=[CommandHandler('start', start)],
         states={'menu': [CallbackQueryHandler(manual_start, pattern='manual'),
-                         CallbackQueryHandler(show_data, pattern='admin')],
+                         CallbackQueryHandler(show_data, pattern='admin'),
+                         CallbackQueryHandler(ask_spreads, pattern='unlock_spreads')],
                 'data': [CallbackQueryHandler(show_data, pattern='data'),
                          MessageHandler((~Filters.text('Вернуться назад')) & Filters.text, change_data)],
                 'data_resetting': [CallbackQueryHandler(reset_data, pattern='change_yes'),
                                    CallbackQueryHandler(start, pattern='change_no')],
                 'data_requesting': [CallbackQueryHandler(start, pattern='menu'),
                                     CallbackQueryHandler(request_changing_data, pattern=''),
-                                    CallbackQueryHandler(ask_resetting_data, pattern='ask')]},
+                                    CallbackQueryHandler(ask_resetting_data, pattern='ask')],
+                'ask_spreads': [MessageHandler(Filters.text | Filters.document, unlock_spreads)]},
         fallbacks=[CommandHandler('start', start)])
     updater.dispatcher.add_handler(conv_handler)
     updater.dispatcher.add_error_handler(error_handler)
@@ -73,3 +117,4 @@ def main():
 if __name__ == '__main__':
     db_session.global_init(os.getenv('DATABASE_URL'))
     main()
+

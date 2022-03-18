@@ -59,7 +59,8 @@ def serve(context: CallbackContext):
     with db_session.create_session() as session:
         for state in session.query(State).all():
             text = ('Работа была выполнена успешно!\n\n'
-                    f'<b>URL обработано:</b> {len(new_data)}\n'
+                    f'<b>Изначальное число URL:</b> {len(input_data)}\n'
+                    f'<b>Из них обработано:</b> {len(new_data)}\n'
                     f'<b>Таблиц создано:</b> {count}')
             if unshared_tables:
                 text += f'\n<b>Таблиц, не получивших права:</b> {len(unshared_tables)}'
@@ -84,6 +85,8 @@ def start(update: Update, context: CallbackContext):
         if not session.query(State).get(context.user_data['id']):
             session.add(State(user_id=context.user_data['id']))
             session.commit()
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton('Запустить работу вручную', callback_data='manual')],
-                                   [InlineKeyboardButton('Настроить переменные', callback_data='admin')]])
+    markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton('Запустить работу вручную', callback_data='manual')],
+         [InlineKeyboardButton('Настроить переменные', callback_data='admin')],
+         [InlineKeyboardButton('Разблокировать таблицы', callback_data='unlock_spreads')]])
     return context.bot.send_message(context.user_data['id'], 'Меню', reply_markup=markup), 'menu'

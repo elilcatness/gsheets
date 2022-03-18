@@ -15,7 +15,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from telegram.error import BadRequest
 from telegram.ext import CallbackContext
 
-from src.constants import MAX_ROWS_COUNT
+from src.constants import MAX_ROWS_COUNT, API_ROWS_LIMIT
 
 from src.db import db_session
 from src.db.models.config import Config
@@ -140,12 +140,19 @@ def process_url(url: str, dt: str, creds: dict) -> list[dict]:
     service = get_console(creds)
     print(f'{dt=}')
     headers = ['page', 'query', 'device', 'country']
-    request = {'startDate': dt,
-               'endDate': dt,
-               'dimensions': headers}
-    response = _execute_request(service, url, request)
+    start_row = 0
+    raw_output, current_rows = [], []
+    while len(current_rows) == API_ROWS_LIMIT or start_row == 0:
+        request = {'startDate': dt,
+                   'endDate': dt,
+                   'dimensions': headers,
+                   'rowLimit': API_ROWS_LIMIT,
+                   'startRow': start_row}
+        current_rows = _execute_request(service, url, request).get('rows', [])
+        raw_output.extend(current_rows)
+        start_row += API_ROWS_LIMIT
     output = []
-    for row in response.get('rows', []):
+    for row in raw_output:
         keys = row.pop('keys')
         data = {headers[i]: keys[i] for i in range(len(keys))}
         output.append({**data, **row})
@@ -171,16 +178,25 @@ def process_table(data: list[dict], service, table_name: str, dt: str, email: st
         service.import_csv(spread.id, f.read().encode('utf-8'))
     spread.worksheets()[0].update_title(dt)
     unshared_tables = []
-    try:
-        spread.share(email, 'user', 'owner')
-    except APIError as e:
-        print(f'[ERROR] {e.response}')
-        unshared_tables.append(spread.url)
+
     try:
         os.remove(filename)
     except Exception as e:
         print(f'[FILE DELETE] {e}')
     return unshared_tables
+
+
+def share_spread(spread, *args, **kwargs):
+    try:
+        spread.share(*args, **kwargs)
+    except APIError as e:
+        errors = e.args[0].get('errors', [])
+        if not errors:
+            raise e
+        if errors[0].get('reason', '' == 'userRateLimitExceeded'):
+            print(f'[ERROR] {e.response}: {e} on {spread}')
+        return False
+    return True
 
 
 def fill_url_spread(url: str, service: Client, dt: str, email: str, creds: dict):
