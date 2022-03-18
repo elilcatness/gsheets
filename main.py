@@ -4,7 +4,7 @@ from datetime import time
 
 from gspread import service_account_from_dict
 from pytz import UTC
-from telegram import Update, ParseMode
+from telegram import Update, ParseMode, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Updater, CallbackContext, CommandHandler, ConversationHandler, CallbackQueryHandler, \
     MessageHandler, Filters
 
@@ -50,9 +50,11 @@ def error_handler(_, context: CallbackContext):
 
 @delete_last_message
 def ask_spreads(_, context: CallbackContext):
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton('Вернуться назад', callback_data='back')]])
     context.bot.send_message(context.user_data['id'],
                              'Отправьте список URL таблиц для разблокировки (каждая на новой строке)\n'
-                             'Или прикрепите текстовый файл (.txt) в таком же формате')
+                             'Или прикрепите текстовый файл (.txt) в таком же формате',
+                             reply_markup=markup)
     return 'ask_spreads'
 
 
@@ -104,7 +106,8 @@ def main():
                 'data_requesting': [CallbackQueryHandler(start, pattern='menu'),
                                     CallbackQueryHandler(request_changing_data, pattern=''),
                                     CallbackQueryHandler(ask_resetting_data, pattern='ask')],
-                'ask_spreads': [MessageHandler(Filters.text | Filters.document, unlock_spreads)]},
+                'ask_spreads': [MessageHandler(Filters.text | Filters.document, unlock_spreads),
+                                CallbackQueryHandler(start, pattern='back')]},
         fallbacks=[CommandHandler('start', start)])
     updater.dispatcher.add_handler(conv_handler)
     updater.dispatcher.add_error_handler(error_handler)
