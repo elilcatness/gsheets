@@ -178,7 +178,8 @@ def process_table(data: list[dict], service, table_name: str, dt: str, email: st
         service.import_csv(spread.id, f.read().encode('utf-8'))
     spread.worksheets()[0].update_title(dt)
     unshared_tables = []
-
+    if not share_spread(spread, email, 'user', 'owner'):
+        unshared_tables.append(spread.url)
     try:
         os.remove(filename)
     except Exception as e:
@@ -218,7 +219,7 @@ def fill_url_spread(url: str, service: Client, dt: str, email: str, creds: dict)
         else:
             sub_data = data[:]
             sub_table_name = table_name
-        unshared_tables = process_table(sub_data, service, sub_table_name, dt, email)
+        unshared_tables.extend(process_table(sub_data, service, sub_table_name, dt, email))
         n += 1
     return n - 1, unshared_tables
 
