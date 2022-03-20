@@ -46,6 +46,11 @@ def error_handler(_, context: CallbackContext):
             context.bot.send_message(state.user_id, f'An exception occurred!\n\n'
                                                     f'{e.__class__}: {e}\n'
                                                     f'Cause: {e.__cause__}\nContext: {e.__context__}\n')
+    for job in context.job_queue.get_jobs_by_name('visual_process'):
+        job.schedule_removal()
+    for key in 'messages', 'completed_count', 'total_count', 'k':
+        if context.job.context.user_data.get(key):
+            context.job.context.user_data.pop(key)
 
 
 @delete_last_message
@@ -110,7 +115,7 @@ def main():
                                 CallbackQueryHandler(start, pattern='back')]},
         fallbacks=[CommandHandler('start', start)])
     updater.dispatcher.add_handler(conv_handler)
-    # updater.dispatcher.add_error_handler(error_handler)
+    updater.dispatcher.add_error_handler(error_handler)
     load_states(updater, conv_handler)
     start_jobs(updater.dispatcher, updater.bot)
     updater.start_polling()
