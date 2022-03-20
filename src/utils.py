@@ -169,15 +169,23 @@ def generate_csv(data: list[dict]) -> str:
     return filename
 
 
-def process_table(data: list[dict], service, table_name: str, dt: str, email: str):
+def process_table(context: CallbackContext, data: list[dict], service, table_name: str, dt: str, email: str):
+    context.job.context.user_data['step'] = 'Формирование CSV файла'
+    context.job.context.user_data['k'] = 0
     filename = generate_csv(data)
+    context.job.context.user_data['step'] = 'Создание таблицы Google'
+    context.job.context.user_data['k'] = 0
     spread = service.create(table_name)
     service: Client
     print(f'{spread=}')
+    context.job.context.user_data['step'] = 'Наполнение таблицы данными из CSV файла'
+    context.job.context.user_data['k'] = 0
     with open(filename, encoding='utf-8') as f:
         service.import_csv(spread.id, f.read().encode('utf-8'))
     spread.worksheets()[0].update_title(dt)
     unshared_tables = []
+    context.job.context.user_data['step'] = f'Передача таблицы пользователю {email}'
+    context.job.context.user_data['k'] = 0
     if not share_spread(spread, email, 'user', 'owner'):
         unshared_tables.append(spread.url)
     try:
@@ -200,7 +208,9 @@ def share_spread(spread, *args, **kwargs):
     return True
 
 
-def fill_url_spread(url: str, service: Client, dt: str, email: str, creds: dict):
+def fill_url_spread(context: CallbackContext, url: str, service: Client, dt: str, email: str, creds: dict):
+    context.job.context.user_data['step'] = 'Получение данных из API'
+    context.job.context.user_data['k'] = 0
     data = process_url(url, dt, creds)
     unshared_tables = []
     if not data:
@@ -219,7 +229,7 @@ def fill_url_spread(url: str, service: Client, dt: str, email: str, creds: dict)
         else:
             sub_data = data[:]
             sub_table_name = table_name
-        unshared_tables.extend(process_table(sub_data, service, sub_table_name, dt, email))
+        unshared_tables.extend(process_table(context, sub_data, service, sub_table_name, dt, email))
         n += 1
     return n - 1, unshared_tables
 

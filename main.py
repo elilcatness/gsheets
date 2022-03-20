@@ -2,6 +2,7 @@ import json
 import os
 from datetime import time
 
+from dotenv import load_dotenv
 from gspread import service_account_from_dict
 from pytz import UTC
 from telegram import Update, ParseMode, InlineKeyboardMarkup, InlineKeyboardButton
@@ -110,7 +111,7 @@ def main():
                                 CallbackQueryHandler(start, pattern='back')]},
         fallbacks=[CommandHandler('start', start)])
     updater.dispatcher.add_handler(conv_handler)
-    updater.dispatcher.add_error_handler(error_handler)
+    # updater.dispatcher.add_error_handler(error_handler)
     load_states(updater, conv_handler)
     start_jobs(updater.dispatcher, updater.bot)
     updater.start_polling()
@@ -118,6 +119,7 @@ def main():
 
 
 if __name__ == '__main__':
+    load_dotenv()
     db_session.global_init(os.getenv('DATABASE_URL'))
     main()
 
