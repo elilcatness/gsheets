@@ -2,7 +2,6 @@ import json
 import os
 from datetime import time
 
-from dotenv import load_dotenv
 from gspread import service_account_from_dict
 from pytz import UTC
 from telegram import Update, ParseMode, InlineKeyboardMarkup, InlineKeyboardButton
@@ -119,7 +118,6 @@ def main():
 
 
 if __name__ == '__main__':
-    load_dotenv()
     db_session.global_init(os.getenv('DATABASE_URL'))
     main()
 
