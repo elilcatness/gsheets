@@ -49,8 +49,8 @@ def error_handler(_, context: CallbackContext):
     for job in context.job_queue.get_jobs_by_name('visual_process'):
         job.schedule_removal()
     for key in 'messages', 'completed_count', 'total_count', 'k':
-        if context.job.context.user_data.get(key):
-            context.job.context.user_data.pop(key)
+        if context.user_data.get(key):
+            context.user_data.pop(key)
 
 
 @delete_last_message
