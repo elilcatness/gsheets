@@ -64,7 +64,7 @@ def serve(context: CallbackContext):
                 raise e
         else:
             new_data.append({'URL': url, 'Last date': today})
-        context.job.context.user_data['completed_count'] = i
+        context.job.context.user_data['completed_count'] = i + 1
         context.job.context.user_data['step'] = 'Готово'
         context.job.context.user_data['k'] = 0
     context.job.context.user_data['step'] = 'Формирование CSV файла изменённой исходной таблицы'
