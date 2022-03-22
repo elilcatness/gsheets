@@ -5,8 +5,8 @@ from datetime import time
 from gspread import service_account_from_dict
 from pytz import UTC
 from telegram import Update, ParseMode, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Updater, CallbackContext, CommandHandler, ConversationHandler, CallbackQueryHandler, \
-    MessageHandler, Filters
+from telegram.ext import (Updater, CallbackContext, CommandHandler, ConversationHandler,
+                          CallbackQueryHandler, MessageHandler, Filters)
 
 from src.admin import show_data, reset_data, request_changing_data, change_data, ask_resetting_data
 from src.db import db_session
@@ -44,13 +44,9 @@ def error_handler(_, context: CallbackContext):
     with db_session.create_session() as session:
         for state in session.query(State).all():
             context.bot.send_message(state.user_id, f'An exception occurred!\n\n'
-                                                    f'{e.__class__}: {e}\n'
-                                                    f'Cause: {e.__cause__}\nContext: {e.__context__}\n')
+                                                    f'{e.__class__}: {e}\n')
     for job in context.job_queue.get_jobs_by_name('visual_process'):
         job.schedule_removal()
-    for key in 'messages', 'completed_count', 'total_count', 'k':
-        if context.user_data.get(key):
-            context.user_data.pop(key)
 
 
 @delete_last_message

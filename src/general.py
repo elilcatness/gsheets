@@ -27,10 +27,10 @@ def serve(context: CallbackContext):
         context.bot.send_message(user_id, 'Считывание данных завершено.\n'
                                           f'Ссылок, отправленных в обработку: <b>{len(input_data)}</b>',
                                  parse_mode=ParseMode.HTML)
-    context.job.context.user_data['messages'] = {user_id: None for user_id in users_ids}
-    context.job.context.user_data['completed_count'] = 0
-    context.job.context.user_data['total_count'] = len(input_data)
-    context.job.context.user_data['k'] = 0
+    context.job.context.bot_data['messages'] = {user_id: None for user_id in users_ids}
+    context.job.context.bot_data['completed_count'] = 0
+    context.job.context.bot_data['total_count'] = len(input_data)
+    context.job.context.bot_data['k'] = 0
     new_data = []
     today = date.today().isoformat()
     service = service_account_from_dict(creds)
@@ -39,8 +39,8 @@ def serve(context: CallbackContext):
     unshared_tables = []
     for i in range(len(input_data)):
         url, last_date = input_data[i]
-        context.job.context.user_data['current_url'] = url
-        context.job.context.user_data['current_date'] = ''
+        context.job.context.bot_data['current_url'] = url
+        context.job.context.bot_data['current_date'] = ''
         if i == 0:
             for job in context.job_queue.get_jobs_by_name('visual_process'):
                 job.schedule_removal()
@@ -49,7 +49,7 @@ def serve(context: CallbackContext):
                                             name='visual_process')
         dates = get_iso_dates_interval(last_date, today)
         for dt in dates:
-            context.job.context.user_data['current_date'] = dt
+            context.job.context.bot_data['current_date'] = dt
             print(url)
             try:
                 k, unshared_sub_tables = fill_url_spread(context, url, service, dt, email, creds)
@@ -64,29 +64,27 @@ def serve(context: CallbackContext):
                 raise e
         else:
             new_data.append({'URL': url, 'Last date': today})
-        context.job.context.user_data['completed_count'] = i + 1
-        context.job.context.user_data['step'] = 'Готово'
-        context.job.context.user_data['k'] = 0
-    context.job.context.user_data['step'] = 'Формирование CSV файла изменённой исходной таблицы'
-    context.job.context.user_data['k'] = 0
+        context.job.context.bot_data['completed_count'] = i + 1
+        context.job.context.bot_data['step'] = 'Готово'
+        context.job.context.bot_data['k'] = 0
+    context.job.context.bot_data['step'] = 'Формирование CSV файла изменённой исходной таблицы'
+    context.job.context.bot_data['k'] = 0
     filename = generate_csv(new_data)
-    context.job.context.user_data['step'] = 'Наполнение исходной таблицы изменёнными данными'
-    context.job.context.user_data['k'] = 0
+    context.job.context.bot_data['step'] = 'Наполнение исходной таблицы изменёнными данными'
+    context.job.context.bot_data['k'] = 0
     with open(filename, encoding='utf-8') as f:
         service.import_csv(spread.id, f.read().encode('utf-8'))
     try:
         os.remove(filename)
     except Exception as e:
         print(f'[FILE DELETE] {e}')
-    context.job.context.user_data['completed_count'] = len(input_data)
-    context.job.context.user_data['step'] = 'Готово'
-    context.job.context.user_data['k'] = 0
+    context.job.context.bot_data['completed_count'] = len(input_data)
+    context.job.context.bot_data['step'] = 'Готово'
+    context.job.context.bot_data['k'] = 0
     time.sleep(1)
     for job in context.job_queue.get_jobs_by_name('visual_process'):
         job.schedule_removal()
-    for key in 'messages', 'completed_count', 'total_count', 'k':
-        if context.job.context.user_data.get(key):
-            context.job.context.user_data.pop(key)
+    context._bot_data = None
     with db_session.create_session() as session:
         for state in session.query(State).all():
             text = ('Работа была выполнена успешно!\n\n'
@@ -109,16 +107,16 @@ def serve(context: CallbackContext):
 
 
 def process_status(context: CallbackContext):
-    k = context.job.context.user_data['k']
-    context.job.context.user_data['k'] = (k + 1) % 4
-    text = (f'<b>Текущий URL:</b> {context.job.context.user_data["current_url"]}\n'
-            f'<b>Текущая дата:</b> {context.job.context.user_data["current_date"]}\n\n'
-            f'{context.job.context.user_data.get("step", "")}{"." * k}\n\n'
+    k = context.job.context.bot_data['k']
+    context.job.context.bot_data['k'] = (k + 1) % 4
+    text = (f'<b>Текущий URL:</b> {context.job.context.bot_data["current_url"]}\n'
+            f'<b>Текущая дата:</b> {context.job.context.bot_data["current_date"]}\n\n'
+            f'{context.job.context.bot_data.get("step", "")}{"." * k}\n\n'
             f'<b>Прогресс:</b> '
-            f'{context.job.context.user_data["completed_count"]}/{context.job.context.user_data["total_count"]}')
-    for user_id, msg_id in context.job.context.user_data['messages'].items():
+            f'{context.job.context.bot_data["completed_count"]}/{context.job.context.bot_data["total_count"]}')
+    for user_id, msg_id in context.job.context.bot_data['messages'].items():
         if not msg_id:
-            context.job.context.user_data['messages'][user_id] = context.bot.send_message(
+            context.job.context.bot_data['messages'][user_id] = context.bot.send_message(
                 user_id, text, parse_mode=ParseMode.HTML).message_id
         else:
             context.bot.edit_message_text(text, user_id, msg_id, parse_mode=ParseMode.HTML)
