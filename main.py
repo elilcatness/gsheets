@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import time
+import time as _time
 
 from gspread import service_account_from_dict
 from pytz import UTC
@@ -69,12 +70,34 @@ def unlock_spreads(update: Update, context: CallbackContext):
     creds = json.loads(cfg['Сервисный аккаунт (JSON)'])
     service = service_account_from_dict(creds)
     unshared_tables = []
-    for spread_url in spreads_urls:
+    # msg = update.message.reply_text(f'Начинаем разблокировку. <b>Количество таблиц:</b> {len(spreads_urls)}',
+    #                                 parse_mode=ParseMode.HTML)
+    # template = (f'<b>Текущая таблица</b>: %s'
+    #             f'\n<b>Таблиц обработано:</b> %d/{len(spreads_urls)}'
+    #             f'\n<b>Таблиц разблокировано:</b> %d/{len(spreads_urls)}')
+    for i, spread_url in enumerate(spreads_urls):
+        # msg.edit_text(template % (spread_url, i, len()))
         spread = service.open_by_url(spread_url)
-        if not share_spread(spread, cfg['Email'], 'user', 'owner'):
+        # try:
+        #     spread = service.open_by_url(spread_url)
+        # except APIError as e:
+        #     reason = get_api_error_reason(e)
+        #     print(f'{reason=}')
+        #     if not reason:
+        #         raise e
+        #     if reason == 'RATE_LIMIT_EXCEEDED':
+        #         _time.sleep(61)
+        #         try:
+        #             spread = service.open_by_url(spread_url)
+        #         except APIError:
+        #             continue
+        #     else:
+        #         raise e
+        if share_spread(spread, cfg['Email'], 'user', 'owner'):
             unshared_tables.append(spread.url)
+        _time.sleep(1.5)
     text = (f'<b>Таблиц разблокировано:</b> <b>{len(spreads_urls) - len(unshared_tables)}</b> '
-            f'из <b>{len(unshared_tables)}</b>')
+            f'из <b>{len(spreads_urls)}</b>')
     if unshared_tables:
         filename = f'{generate_timestamp()}.txt'
         with open(filename, 'w', encoding='utf-8') as f:
@@ -111,7 +134,7 @@ def main():
                                 CallbackQueryHandler(start, pattern='back')]},
         fallbacks=[CommandHandler('start', start)])
     updater.dispatcher.add_handler(conv_handler)
-    updater.dispatcher.add_error_handler(error_handler)
+    # updater.dispatcher.add_error_handler(error_handler)
     load_states(updater, conv_handler)
     start_jobs(updater.dispatcher, updater.bot)
     updater.start_polling()

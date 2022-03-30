@@ -202,7 +202,7 @@ def share_spread(spread, *args, **kwargs):
         errors = e.args[0].get('errors', [])
         if not errors:
             raise e
-        if errors[0].get('reason', '' == 'userRateLimitExceeded'):
+        if errors[0].get('reason', '') == 'userRateLimitExceeded':
             print(f'[ERROR] {e.response}: {e} on {spread}')
         return False
     return True
