@@ -8,6 +8,7 @@ from pytz import UTC
 from telegram import Update, ParseMode, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (Updater, CallbackContext, CommandHandler, ConversationHandler,
                           CallbackQueryHandler, MessageHandler, Filters)
+from telegram.error import Unauthorized
 
 from src.admin import show_data, reset_data, request_changing_data, change_data, ask_resetting_data
 from src.db import db_session
@@ -44,8 +45,11 @@ def error_handler(_, context: CallbackContext):
     e = context.error
     with db_session.create_session() as session:
         for state in session.query(State).all():
-            context.bot.send_message(state.user_id, f'An exception occurred!\n\n'
-                                                    f'{e.__class__}: {e}\n')
+            try:
+                context.bot.send_message(state.user_id, f'An exception occurred!\n\n'
+                                                        f'{e.__class__}: {e}\n')
+            except Unauthorized as e:
+                print(f'[{state.user_id}]: {e}')
     for job in context.job_queue.get_jobs_by_name('visual_process'):
         job.schedule_removal()
 
@@ -103,8 +107,11 @@ def unlock_spreads(update: Update, context: CallbackContext):
         with open(filename, 'w', encoding='utf-8') as f:
             f.write('\n'.join(unshared_tables))
         with open(filename, 'rb') as f:
-            context.bot.send_document(context.user_data['id'], f, filename, text,
-                                      parse_mode=ParseMode.HTML)
+            try:
+                context.bot.send_document(context.user_data['id'], f, filename, text,
+                                          parse_mode=ParseMode.HTML)
+            except Unauthorized as e:
+                print(f'[{context.user_data["id"]}]: {e}')
         try:
             os.remove(filename)
         except Exception as e:
